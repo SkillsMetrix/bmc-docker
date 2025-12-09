@@ -1,24 +1,84 @@
-# Build stage
-FROM python:3.11-slim AS builder
+import os
+import asyncio
+from typing import List, Optional
 
-WORKDIR /app
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, EmailStr, Field
+from databases import Database
 
-RUN python -m venv /venv
+DATABASE_URL = os.getenv("DATABASE_URL", "mysql+aiomysql://root:root@localhost:3306/myappdb")
 
-ENV PATH ="/venv/bin:$PATH"
+app = FastAPI(title="Minimal FastAPI + MySQL")
 
-COPY requirements.txt .
+# Pydantic models
+class UserIn(BaseModel):
+    uname: str = Field(..., example="Alice")
+    email: EmailStr = Field(..., example="alice@example.com")
 
-RUN pip install --no-cache-dir -r requirements.txt
+class UserOut(UserIn):
+    id: int
 
-COPY . .
+# DB
+database = Database(DATABASE_URL)
 
-# Staage-2 runtime
+# small helper to wait until DB is ready
+async def wait_for_db(retries: int = 15, delay: float = 1.0):
+    for i in range(retries):
+        try:
+            await database.connect()
+            # simple test query
+            await database.fetch_one("SELECT 1")
+            return
+        except Exception:
+            try:
+                await database.disconnect()
+            except Exception:
+                pass
+            await asyncio.sleep(delay)
+    raise RuntimeError("Could not connect to the database.")
 
-FROM python:3.11-slim
-WORKDIR /app
-COPY --from=builder /venv /venv
-ENV PATH ="/venv/bin:$PATH"
-COPY . .
-EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+@app.on_event("startup")
+async def startup():
+    # Try to connect (with retries)
+    await wait_for_db()
+
+    # create table if not exists (raw SQL)
+    await database.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      uname VARCHAR(100) NOT NULL,
+      email VARCHAR(150) NOT NULL
+    ) ENGINE=InnoDB;
+    """)
+
+    # insert two dummy records if table empty
+    row = await database.fetch_one("SELECT COUNT(*) AS cnt FROM users;")
+    count = row["cnt"] if row is not None else 0
+    if count == 0:
+        await database.execute_many(
+            query="INSERT INTO users (uname, email) VALUES (:uname, :email)",
+            values=[
+                {"uname": "Admin", "email": "admin@example.com"},
+                {"uname": "Guest", "email": "guest@example.com"},
+            ]
+        )
+
+@app.on_event("shutdown")
+async def shutdown():
+    await database.disconnect()
+
+@app.get("/", tags=["root"])
+async def root():
+    return {"message": "FastAPI + MySQL (minimal) is running"}
+
+@app.get("/users", response_model=List[UserOut], tags=["users"])
+async def get_users():
+    rows = await database.fetch_all("SELECT id, uname, email FROM users ORDER BY id;")
+    return [{"id": r["id"], "uname": r["uname"], "email": r["email"]} for r in rows]
+
+@app.get("/users/{user_id}", response_model=UserOut, tags=["users"])
+async def get_user(user_id: int):
+    row = await database.fetch_one("SELECT id, uname, email FROM users WHERE id = :id", values={"id": user_id})
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"id": row["id"], "uname": row["uname"], "email": row["email"]}
