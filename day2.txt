@@ -1,84 +1,88 @@
-import os
 import asyncio
-from typing import List, Optional
+from typing import List
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 from databases import Database
 
-DATABASE_URL = os.getenv("DATABASE_URL", "mysql+aiomysql://root:root@localhost:3306/myappdb")
+# HARD-CODED MySQL connection (inside Docker networks, hostname = mysql)
+DATABASE_URL = "mysql+aiomysql://appuser:app123@mysql:3306/myappdb"
 
-app = FastAPI(title="Minimal FastAPI + MySQL")
+app = FastAPI(title="FastAPI + MySQL (Hardcoded Minimal Example)")
 
-# Pydantic models
-class UserIn(BaseModel):
-    uname: str = Field(..., example="Alice")
-    email: EmailStr = Field(..., example="alice@example.com")
-
-class UserOut(UserIn):
-    id: int
-
-# DB
 database = Database(DATABASE_URL)
 
-# small helper to wait until DB is ready
-async def wait_for_db(retries: int = 15, delay: float = 1.0):
-    for i in range(retries):
+
+# Pydantic Models
+class UserOut(BaseModel):
+    id: int
+    uname: str
+    email: EmailStr
+
+
+# Wait until MySQL is ready
+async def wait_for_db():
+    for _ in range(20):  # up to ~20 seconds
         try:
             await database.connect()
-            # simple test query
             await database.fetch_one("SELECT 1")
             return
         except Exception:
             try:
                 await database.disconnect()
-            except Exception:
+            except:
                 pass
-            await asyncio.sleep(delay)
-    raise RuntimeError("Could not connect to the database.")
+            await asyncio.sleep(1)
+    raise RuntimeError("MySQL is not ready")
+
 
 @app.on_event("startup")
 async def startup():
-    # Try to connect (with retries)
     await wait_for_db()
 
-    # create table if not exists (raw SQL)
+    # Create table
     await database.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      uname VARCHAR(100) NOT NULL,
-      email VARCHAR(150) NOT NULL
+    CREATE TABLE IF NOT EXISTS users(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        uname VARCHAR(100) NOT NULL,
+        email VARCHAR(150) NOT NULL
     ) ENGINE=InnoDB;
     """)
 
-    # insert two dummy records if table empty
-    row = await database.fetch_one("SELECT COUNT(*) AS cnt FROM users;")
-    count = row["cnt"] if row is not None else 0
-    if count == 0:
+    # Insert dummy users only if table empty
+    result = await database.fetch_one("SELECT COUNT(*) AS cnt FROM users;")
+    if result["cnt"] == 0:
         await database.execute_many(
-            query="INSERT INTO users (uname, email) VALUES (:uname, :email)",
-            values=[
+            "INSERT INTO users (uname, email) VALUES (:uname, :email)",
+            [
                 {"uname": "Admin", "email": "admin@example.com"},
                 {"uname": "Guest", "email": "guest@example.com"},
             ]
         )
 
+
 @app.on_event("shutdown")
 async def shutdown():
     await database.disconnect()
 
-@app.get("/", tags=["root"])
-async def root():
-    return {"message": "FastAPI + MySQL (minimal) is running"}
 
-@app.get("/users", response_model=List[UserOut], tags=["users"])
+@app.get("/")
+async def root():
+    return {"message": "FastAPI + MySQL is running with hardcoded config!"}
+
+
+@app.get("/users", response_model=List[UserOut])
 async def get_users():
-    rows = await database.fetch_all("SELECT id, uname, email FROM users ORDER BY id;")
+    rows = await database.fetch_all("SELECT * FROM users;")
     return [{"id": r["id"], "uname": r["uname"], "email": r["email"]} for r in rows]
 
-@app.get("/users/{user_id}", response_model=UserOut, tags=["users"])
+
+@app.get("/users/{user_id}", response_model=UserOut)
 async def get_user(user_id: int):
-    row = await database.fetch_one("SELECT id, uname, email FROM users WHERE id = :id", values={"id": user_id})
+    row = await database.fetch_one(
+        "SELECT * FROM users WHERE id = :id;",
+        values={"id": user_id},
+    )
     if not row:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(404, "User not found")
     return {"id": row["id"], "uname": row["uname"], "email": row["email"]}
