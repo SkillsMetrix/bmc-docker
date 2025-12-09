@@ -86,3 +86,73 @@ async def get_user(user_id: int):
     if not row:
         raise HTTPException(404, "User not found")
     return {"id": row["id"], "uname": row["uname"], "email": row["email"]}
+
+
+
+-----
+
+fastapi-mysql-bmc-pune/
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+└── main.py
+
+
+fastapi
+uvicorn[standard]
+databases
+aiomysql
+
+-------
+    
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# install build dependencies for aiomysql
+RUN apt-get update && \
+    apt-get install -y build-essential default-libmysqlclient-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+
+
+---
+version: "3.9"
+
+services:
+  api:
+    build: .
+    container_name: fastapi-mysql-api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mysql
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    container_name: fastapi-mysql-db
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: myappdb
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: bmc123
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+
