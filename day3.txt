@@ -14,3 +14,12 @@ services:
 volumes:
   myvol:
     external: true
+
+
+--
+
+
+MYSQL_ROOT_PASSWORD=password
+MYSQL_DATABASE=test
+MYSQL_USER=sa
+MYSQL_PASSWORD=password
