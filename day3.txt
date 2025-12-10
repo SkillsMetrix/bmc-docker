@@ -1,37 +1,74 @@
-MYSQL_ROOT_PASSWORD=password
-MYSQL_DATABASE=test
-MYSQL_USER=sa
-MYSQL_PASSWORD=password
-
- 
-SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/test
-SPRING_DATASOURCE_USERNAME=sa
-SPRING_DATASOURCE_PASSWORD=password
+# create app dir and files
+mkdir -p fastapi-app/app && cd fastapi-app
 
 
+app/main.py 
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import Dict
+
+app = FastAPI(title="Sample FastAPI App")
+items: Dict[int, dict] = {1: {"id":1,"name":"Item One"}}
+
+class Item(BaseModel):
+    name: str
+
+@app.get("/")
+def read_root():
+    return {"message":"Hello from FastAPI!"}
+
+@app.get("/items")
+def list_items():
+    return list(items.values())
+
+@app.post("/items", status_code=201)
+def create_item(item: Item):
+    new_id = max(items.keys(), default=0) + 1
+    items[new_id] = {"id": new_id, "name": item.name}
+    return items[new_id]
+
+
+cat > requirements.txt 
+
+fastapi==0.100.0
+uvicorn[standard]==0.23.1
+REQ
+
+cat > Dockerfile <<'DOCK'
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app ./app
+EXPOSE 8000
+CMD ["uvicorn","app.main:app","--host","0.0.0.0","--port","8000"]
+
+-----------
+
+# from fastapi-app directory
+docker build -t sample-fastapi:pwd .
+
+cat > stack.yml <<'YAML'
 version: "3.8"
-
 services:
-  mysql:
-    image: mysql:5.6
-    container_name: mysql-standalone
-    env_file:
-      - mysql.env
+  web:
+    image: sample-fastapi:pwd
     ports:
-      - "3306:3306"
-    volumes:
-      - myvol:/var/lib/mysql
+      - target: 8000
+        published: 8080
+        protocol: tcp
+        mode: host
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+YAML
 
-  app:
-    build: .
-    container_name: users-mysql-app
-    env_file:
-      - mysql.env
-    ports:
-      - "8086:8086"
-    depends_on:
-      - mysql
+docker stack deploy -c stack.yml mystack
 
-volumes:
-  myvol:
-    external: true
+
+
+docker stack services mystack
+docker service ps mystack_web
+docker service logs -f mystack_web
