@@ -1,20 +1,16 @@
-
-version: "3.9"
+version: "3.8"
 services:
   mysql:
-    image: mysql:8.0
-    container_name: bmc-mysql
-    environment:
-       MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+    image: mysql:5.6
+    container_name: mysql-standalone
+    env_file:
+      - mysql.env
+    ports:
+      - "3306"
     volumes:
       - myvol:/var/lib/mysql
-    secrets:
-      - mysql_root_password
-    ports:
-      - "3307:3306"
+    restart: unless-stopped
 
-secrets:
-  mysql_root_password:
-    file: ./secrets/mysql_root_pass.txt
 volumes:
   myvol:
+    external: true
